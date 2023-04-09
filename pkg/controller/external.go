@@ -262,6 +262,14 @@ func addTTR(mg xpresource.Managed) {
 	metrics.TTRMeasurements.WithLabelValues(gvk.Group, gvk.Version, gvk.Kind).Observe(time.Since(mg.GetCreationTimestamp().Time).Seconds())
 }
 
+func (e *external) Plan(ctx context.Context, mg xpresource.Managed) (error) {
+                plan, err := e.workspace.Plan(ctx)
+                if err != nil {
+                        return errors.Wrap(err, errPlan)
+                }
+               return nil
+}
+
 func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.ExternalCreation, error) {
 	if err := e.scheduleProvider(); err != nil {
 		return managed.ExternalCreation{}, errors.Wrapf(err, "cannot schedule a native provider during create: %s", mg.GetUID())
