@@ -1,5 +1,7 @@
 module github.com/upbound/upjet
 
+replace github.com/upbound/upjet => github.com/elvis-cai/upjet v0.0.0-20230409105218-c4293426490f
+
 go 1.19
 
 require (
