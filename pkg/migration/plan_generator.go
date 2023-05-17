@@ -17,6 +17,7 @@ package migration
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,7 +50,6 @@ const (
 	errComposedTemplateMigrate = "failed to migrate the composed templates of the composition"
 	errResourceOutput          = "failed to output migrated resource"
 	errResourceOrphan          = "failed to orphan managed resource"
-	errDeletionOrphan          = "failed to set deletion policy to Orphan"
 	errCompositionOutput       = "failed to output migrated composition"
 	errCompositeOutput         = "failed to output migrated composite"
 	errClaimOutput             = "failed to output migrated claim"
@@ -76,7 +76,31 @@ const (
 
 const (
 	versionV010 = "0.1.0"
+
+	keyCompositionRef = "compositionRef"
+	keyResourceRefs   = "resourceRefs"
 )
+
+// PlanGeneratorOption configures a PlanGenerator
+type PlanGeneratorOption func(generator *PlanGenerator)
+
+// WithErrorOnInvalidPatchSchema returns a PlanGeneratorOption for configuring
+// whether the PlanGenerator should error and stop the migration plan
+// generation in case an error is encountered while checking a patch
+// statement's conformance to the migration source or target.
+func WithErrorOnInvalidPatchSchema(e bool) PlanGeneratorOption {
+	return func(pg *PlanGenerator) {
+		pg.ErrorOnInvalidPatchSchema = e
+	}
+}
+
+// WithSkipGVKs configures the set of GVKs to skip for conversion
+// during a migration.
+func WithSkipGVKs(gvk ...schema.GroupVersionKind) PlanGeneratorOption {
+	return func(pg *PlanGenerator) {
+		pg.SkipGVKs = gvk
+	}
+}
 
 // PlanGenerator generates a migration.Plan reading the manifests available
 // from `source`, converting managed resources and compositions using the
@@ -89,16 +113,30 @@ type PlanGenerator struct {
 	// Plan is the migration.Plan whose steps are expected
 	// to complete a migration when they're executed in order.
 	Plan Plan
+	// ErrorOnInvalidPatchSchema errors and stops plan generation in case
+	// an error is encountered while checking the conformance of a patch
+	// statement against the migration source or the migration target.
+	ErrorOnInvalidPatchSchema bool
+	// GVKs of managed resources that
+	// should be skipped for conversion during the migration, if no
+	// converters are registered for them. If any of the GVK components
+	// is left empty, it will be a wildcard component.
+	// Exact matching with an empty group name is not possible.
+	SkipGVKs []schema.GroupVersionKind
 }
 
 // NewPlanGenerator constructs a new PlanGenerator using the specified
 // Source and Target and the default converter Registry.
-func NewPlanGenerator(registry *Registry, source Source, target Target) PlanGenerator {
-	return PlanGenerator{
+func NewPlanGenerator(registry *Registry, source Source, target Target, opts ...PlanGeneratorOption) PlanGenerator {
+	pg := &PlanGenerator{
 		source:   source,
 		target:   target,
 		registry: registry,
 	}
+	for _, o := range opts {
+		o(pg)
+	}
+	return *pg
 }
 
 // GeneratePlan generates a migration plan for the manifests available from
@@ -109,6 +147,37 @@ func NewPlanGenerator(registry *Registry, source Source, target Target) PlanGene
 func (pg *PlanGenerator) GeneratePlan() error {
 	pg.buildPlan()
 	return errors.Wrap(pg.convert(), errPlanGeneration)
+}
+
+func (pg *PlanGenerator) convertPatchSets(o UnstructuredWithMetadata) ([]string, error) {
+	var converted []string
+	for _, psConv := range pg.registry.patchSetConverters {
+		if psConv.re == nil || psConv.converter == nil {
+			continue
+		}
+		if !psConv.re.MatchString(o.Object.GetName()) {
+			continue
+		}
+		c, err := convertToComposition(o.Object.Object)
+		if err != nil {
+			return nil, errors.Wrap(err, errUnstructuredConvert)
+		}
+		oldPatchSets := make([]xpv1.PatchSet, len(c.Spec.PatchSets))
+		for i, ps := range c.Spec.PatchSets {
+			oldPatchSets[i] = *ps.DeepCopy()
+		}
+		psMap := convertToMap(c.Spec.PatchSets)
+		if err := psConv.converter.PatchSets(psMap); err != nil {
+			return nil, errors.Wrapf(err, "failed to call PatchSet converter on Composition: %s", c.GetName())
+		}
+		newPatchSets := convertFromMap(psMap, oldPatchSets, true)
+		converted = append(converted, getConvertedPatchSetNames(newPatchSets, oldPatchSets)...)
+		pv := fieldpath.Pave(o.Object.Object)
+		if err := pv.SetValue("spec.patchSets", newPatchSets); err != nil {
+			return nil, errors.Wrapf(err, "failed to set converted patch sets on Composition: %s", c.GetName())
+		}
+	}
+	return converted, nil
 }
 
 func (pg *PlanGenerator) convert() error { //nolint: gocyclo
@@ -198,7 +267,7 @@ func (pg *PlanGenerator) convert() error { //nolint: gocyclo
 
 func (pg *PlanGenerator) convertResource(o UnstructuredWithMetadata, compositionContext bool) ([]UnstructuredWithMetadata, bool, error) {
 	gvk := o.Object.GroupVersionKind()
-	conv := pg.registry.converters[gvk]
+	conv := pg.registry.resourceConverters[gvk]
 	if conv == nil {
 		return []UnstructuredWithMetadata{o}, false, nil
 	}
@@ -262,17 +331,17 @@ func toManagedResource(c runtime.ObjectCreater, u unstructured.Unstructured) (re
 }
 
 func (pg *PlanGenerator) convertComposition(o UnstructuredWithMetadata) (*UnstructuredWithMetadata, bool, error) { // nolint:gocyclo
-	c, err := convertToComposition(o.Object.Object)
+	convertedPS, err := pg.convertPatchSets(o)
+	if err != nil {
+		return nil, false, errors.Wrap(err, "failed to convert patch sets")
+	}
+	comp, err := convertToComposition(o.Object.Object)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errUnstructuredConvert)
 	}
-	targetPatchSets := make([]xpv1.PatchSet, 0, len(c.Spec.PatchSets))
-	for _, ps := range c.Spec.PatchSets {
-		targetPatchSets = append(targetPatchSets, *ps.DeepCopy())
-	}
 	var targetResources []*xpv1.ComposedTemplate
 	isConverted := false
-	for _, cmp := range c.Spec.Resources {
+	for _, cmp := range comp.Spec.Resources {
 		u, err := FromRawExtension(cmp.Base)
 		if err != nil {
 			return nil, false, errors.Wrap(err, errCompositionMigrate)
@@ -297,35 +366,46 @@ func (pg *PlanGenerator) convertComposition(o UnstructuredWithMetadata) (*Unstru
 			c.Base = runtime.RawExtension{
 				Raw: buff,
 			}
-			if err := pg.setDefaultsOnTargetTemplate(cmp.Name, &sourceNameUsed, gvk, u.Object.GroupVersionKind(), c, targetPatchSets); err != nil {
+			if err := pg.setDefaultsOnTargetTemplate(cmp.Name, &sourceNameUsed, gvk, u.Object.GroupVersionKind(), c, comp.Spec.PatchSets, convertedPS); err != nil {
 				return nil, false, errors.Wrap(err, errComposedTemplateMigrate)
 			}
 			cmps = append(cmps, c)
 		}
-		conv := pg.registry.converters[gvk]
+		conv := pg.registry.templateConverters[gvk]
 		if conv != nil {
-			ps, err := conv.Composition(targetPatchSets, cmp, cmps...)
-			if err != nil {
+			if err := conv.ComposedTemplate(cmp, cmps...); err != nil {
 				return nil, false, errors.Wrap(err, errComposedTemplateMigrate)
 			}
-			targetPatchSets = ps
 		}
 		targetResources = append(targetResources, cmps...)
 	}
-	c.Spec.PatchSets = targetPatchSets
-	c.Spec.Resources = make([]xpv1.ComposedTemplate, 0, len(targetResources))
+	comp.Spec.Resources = make([]xpv1.ComposedTemplate, 0, len(targetResources))
 	for _, cmp := range targetResources {
-		c.Spec.Resources = append(c.Spec.Resources, *cmp)
+		comp.Spec.Resources = append(comp.Spec.Resources, *cmp)
 	}
 	return &UnstructuredWithMetadata{
-		Object:   ToSanitizedUnstructured(&c),
+		Object:   ToSanitizedUnstructured(&comp),
 		Metadata: o.Metadata,
 	}, isConverted, nil
 }
 
-func (pg *PlanGenerator) setDefaultsOnTargetTemplate(sourceName *string, sourceNameUsed *bool, gvkSource, gvkTarget schema.GroupVersionKind, target *xpv1.ComposedTemplate, patchSets []xpv1.PatchSet) error {
+func (pg *PlanGenerator) isGVKSkipped(sourceGVK schema.GroupVersionKind) bool {
+	for _, gvk := range pg.SkipGVKs {
+		if (len(gvk.Group) == 0 || gvk.Group == sourceGVK.Group) &&
+			(len(gvk.Version) == 0 || gvk.Version == sourceGVK.Version) &&
+			(len(gvk.Kind) == 0 || gvk.Kind == sourceGVK.Kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func (pg *PlanGenerator) setDefaultsOnTargetTemplate(sourceName *string, sourceNameUsed *bool, gvkSource, gvkTarget schema.GroupVersionKind, target *xpv1.ComposedTemplate, patchSets []xpv1.PatchSet, convertedPS []string) error {
+	if pg.isGVKSkipped(gvkSource) {
+		return nil
+	}
 	// remove invalid patches that do not conform to the migration target's schema
-	if err := removeInvalidPatches(pg.registry.scheme, gvkSource, gvkTarget, patchSets, target); err != nil {
+	if err := pg.removeInvalidPatches(gvkSource, gvkTarget, patchSets, target, convertedPS); err != nil {
 		return errors.Wrap(err, "failed to set the defaults on the migration target composed template")
 	}
 	if *sourceNameUsed || gvkSource.Kind != gvkTarget.Kind {
@@ -346,12 +426,14 @@ func (pg *PlanGenerator) buildPlan() {
 	pg.Plan.Spec.Steps = make([]Step, 10)
 
 	pg.Plan.Spec.Steps[stepPauseManaged].Name = "pause-managed"
-	pg.Plan.Spec.Steps[stepPauseManaged].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepPauseManaged].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepPauseManaged].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepPauseManaged].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepPauseManaged].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepPauseComposites].Name = "pause-composites"
-	pg.Plan.Spec.Steps[stepPauseComposites].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepPauseComposites].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepPauseComposites].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepPauseComposites].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepPauseComposites].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepCreateNewManaged].Name = "create-new-managed"
 	pg.Plan.Spec.Steps[stepCreateNewManaged].Type = StepTypeApply
@@ -362,16 +444,19 @@ func (pg *PlanGenerator) buildPlan() {
 	pg.Plan.Spec.Steps[stepNewCompositions].Apply = &ApplyStep{}
 
 	pg.Plan.Spec.Steps[stepEditComposites].Name = "edit-composites"
-	pg.Plan.Spec.Steps[stepEditComposites].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepEditComposites].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepEditComposites].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepEditComposites].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepEditComposites].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepEditClaims].Name = "edit-claims"
-	pg.Plan.Spec.Steps[stepEditClaims].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepEditClaims].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepEditClaims].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepEditClaims].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepEditClaims].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Name = "deletion-policy-orphan"
-	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepDeleteOldManaged].Name = "delete-old-managed"
 	pg.Plan.Spec.Steps[stepDeleteOldManaged].Type = StepTypeDelete
@@ -383,12 +468,14 @@ func (pg *PlanGenerator) buildPlan() {
 	}
 
 	pg.Plan.Spec.Steps[stepStartManaged].Name = "start-managed"
-	pg.Plan.Spec.Steps[stepStartManaged].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepStartManaged].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepStartManaged].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepStartManaged].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepStartManaged].Patch.Type = PatchTypeMerge
 
 	pg.Plan.Spec.Steps[stepStartComposites].Name = "start-composites"
-	pg.Plan.Spec.Steps[stepStartComposites].Type = StepTypeApply
-	pg.Plan.Spec.Steps[stepStartComposites].Apply = &ApplyStep{}
+	pg.Plan.Spec.Steps[stepStartComposites].Type = StepTypePatch
+	pg.Plan.Spec.Steps[stepStartComposites].Patch = &PatchStep{}
+	pg.Plan.Spec.Steps[stepStartComposites].Patch.Type = PatchTypeMerge
 	pg.Plan.Version = versionV010
 }
 
@@ -410,37 +497,36 @@ func (pg *PlanGenerator) addStepsForManagedResource(u *UnstructuredWithMetadata)
 }
 
 func (pg *PlanGenerator) stepStartManagedResource(u *UnstructuredWithMetadata) error {
-	annot := u.Object.GetAnnotations()
-	if annot != nil {
-		delete(annot, meta.AnnotationKeyReconciliationPaused)
-		u.Object.SetAnnotations(annot)
-	}
-
 	u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepStartManaged].Name, getQualifiedName(u.Object))
-	pg.Plan.Spec.Steps[stepStartManaged].Apply.Files = append(pg.Plan.Spec.Steps[stepStartManaged].Apply.Files, u.Metadata.Path)
-	return errors.Wrap(pg.target.Put(*u), errResourceOutput)
+	pg.Plan.Spec.Steps[stepStartManaged].Patch.Files = append(pg.Plan.Spec.Steps[stepStartManaged].Patch.Files, u.Metadata.Path)
+	return pg.pause(*u, false)
 }
 
 func (pg *PlanGenerator) stepPauseManagedResource(u *UnstructuredWithMetadata, qName string) error {
 	u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepPauseManaged].Name, qName)
-	pg.Plan.Spec.Steps[stepPauseManaged].Apply.Files = append(pg.Plan.Spec.Steps[stepPauseManaged].Apply.Files, u.Metadata.Path)
-	return pg.pause(u.Metadata.Path, &u.Object)
+	pg.Plan.Spec.Steps[stepPauseManaged].Patch.Files = append(pg.Plan.Spec.Steps[stepPauseManaged].Patch.Files, u.Metadata.Path)
+	return pg.pause(*u, true)
 }
 
 func (pg *PlanGenerator) stepPauseComposite(u *UnstructuredWithMetadata) error {
 	u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepPauseComposites].Name, getQualifiedName(u.Object))
-	pg.Plan.Spec.Steps[stepPauseComposites].Apply.Files = append(pg.Plan.Spec.Steps[stepPauseComposites].Apply.Files, u.Metadata.Path)
-	return pg.pause(u.Metadata.Path, &u.Object)
+	pg.Plan.Spec.Steps[stepPauseComposites].Patch.Files = append(pg.Plan.Spec.Steps[stepPauseComposites].Patch.Files, u.Metadata.Path)
+	return pg.pause(*u, true)
 }
 
 func (pg *PlanGenerator) stepOrphanManagedResource(u *UnstructuredWithMetadata, qName string) error {
-	pv := fieldpath.Pave(u.Object.Object)
-	if err := pv.SetValue("spec.deletionPolicy", v1.DeletionOrphan); err != nil {
-		return errors.Wrap(err, errDeletionOrphan)
-	}
 	u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Name, qName)
-	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Apply.Files = append(pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Apply.Files, u.Metadata.Path)
-	return errors.Wrap(pg.target.Put(*u), errResourceOrphan)
+	pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Patch.Files = append(pg.Plan.Spec.Steps[stepDeletionPolicyOrphan].Patch.Files, u.Metadata.Path)
+	return errors.Wrap(pg.target.Put(UnstructuredWithMetadata{
+		Object: unstructured.Unstructured{
+			Object: addNameGVK(u.Object, map[string]any{
+				"spec": map[string]any{
+					"deletionPolicy": string(v1.DeletionOrphan),
+				},
+			}),
+		},
+		Metadata: u.Metadata,
+	}), errResourceOrphan)
 }
 
 func (pg *PlanGenerator) stepDeleteOldManagedResource(u *UnstructuredWithMetadata) {
@@ -451,12 +537,19 @@ func (pg *PlanGenerator) stepDeleteOldManagedResource(u *UnstructuredWithMetadat
 		})
 }
 
-func (pg *PlanGenerator) pause(fp string, u *unstructured.Unstructured) error {
-	meta.AddAnnotations(u, map[string]string{meta.AnnotationKeyReconciliationPaused: "true"})
+func (pg *PlanGenerator) pause(u UnstructuredWithMetadata, isPaused bool) error {
 	return errors.Wrap(pg.target.Put(UnstructuredWithMetadata{
-		Object: *u,
+		Object: unstructured.Unstructured{
+			Object: addNameGVK(u.Object, map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]any{
+						meta.AnnotationKeyReconciliationPaused: strconv.FormatBool(isPaused),
+					},
+				},
+			}),
+		},
 		Metadata: Metadata{
-			Path: fp,
+			Path: u.Metadata.Path,
 		},
 	}), errPause)
 }
@@ -491,12 +584,9 @@ func (pg *PlanGenerator) stepNewComposition(u *UnstructuredWithMetadata) error {
 
 func (pg *PlanGenerator) stepStartComposites(composites []UnstructuredWithMetadata) error {
 	for _, u := range composites {
-		annot := u.Object.GetAnnotations()
-		delete(annot, meta.AnnotationKeyReconciliationPaused)
-		u.Object.SetAnnotations(annot)
 		u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepStartComposites].Name, getQualifiedName(u.Object))
-		pg.Plan.Spec.Steps[stepStartComposites].Apply.Files = append(pg.Plan.Spec.Steps[stepStartComposites].Apply.Files, u.Metadata.Path)
-		if err := pg.target.Put(u); err != nil {
+		pg.Plan.Spec.Steps[stepStartComposites].Patch.Files = append(pg.Plan.Spec.Steps[stepStartComposites].Patch.Files, u.Metadata.Path)
+		if err := pg.pause(u, false); err != nil {
 			return errors.Wrap(err, errCompositeOutput)
 		}
 	}
@@ -504,9 +594,10 @@ func (pg *PlanGenerator) stepStartComposites(composites []UnstructuredWithMetada
 }
 
 func (pg *PlanGenerator) stepEditComposites(composites []UnstructuredWithMetadata, convertedMap map[corev1.ObjectReference][]UnstructuredWithMetadata, convertedComposition map[string]string) error {
-	for i, u := range composites {
+	for _, u := range composites {
 		cp := composite.Unstructured{Unstructured: u.Object}
 		refs := cp.GetResourceReferences()
+		// compute new spec.resourceRefs so that the XR references the new MRs
 		newRefs := make([]corev1.ObjectReference, 0, len(refs))
 		for _, ref := range refs {
 			converted, ok := convertedMap[ref]
@@ -524,16 +615,26 @@ func (pg *PlanGenerator) stepEditComposites(composites []UnstructuredWithMetadat
 			}
 		}
 		cp.SetResourceReferences(newRefs)
+		// compute new spec.compositionRef
 		if ref := cp.GetCompositionReference(); ref != nil && convertedComposition[ref.Name] != "" {
 			ref.Name = convertedComposition[ref.Name]
 			cp.SetCompositionReference(ref)
 		}
+		spec := u.Object.Object["spec"].(map[string]any)
 		u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepEditComposites].Name, getQualifiedName(u.Object))
-		pg.Plan.Spec.Steps[stepEditComposites].Apply.Files = append(pg.Plan.Spec.Steps[stepEditComposites].Apply.Files, u.Metadata.Path)
-		if err := pg.target.Put(u); err != nil {
+		pg.Plan.Spec.Steps[stepEditComposites].Patch.Files = append(pg.Plan.Spec.Steps[stepEditComposites].Patch.Files, u.Metadata.Path)
+		if err := pg.target.Put(UnstructuredWithMetadata{
+			Object: unstructured.Unstructured{
+				Object: addNameGVK(u.Object, map[string]any{
+					"spec": map[string]any{
+						keyResourceRefs:   spec[keyResourceRefs],
+						keyCompositionRef: spec[keyCompositionRef]},
+				}),
+			},
+			Metadata: u.Metadata,
+		}); err != nil {
 			return errors.Wrap(err, errCompositeOutput)
 		}
-		composites[i] = u
 	}
 	return nil
 }
@@ -546,8 +647,17 @@ func (pg *PlanGenerator) stepEditClaims(claims []UnstructuredWithMetadata, conve
 			cm.SetCompositionReference(ref)
 		}
 		u.Metadata.Path = fmt.Sprintf("%s/%s.yaml", pg.Plan.Spec.Steps[stepEditClaims].Name, getQualifiedName(u.Object))
-		pg.Plan.Spec.Steps[stepEditClaims].Apply.Files = append(pg.Plan.Spec.Steps[stepEditClaims].Apply.Files, u.Metadata.Path)
-		if err := pg.target.Put(u); err != nil {
+		pg.Plan.Spec.Steps[stepEditClaims].Patch.Files = append(pg.Plan.Spec.Steps[stepEditClaims].Patch.Files, u.Metadata.Path)
+		if err := pg.target.Put(UnstructuredWithMetadata{
+			Object: unstructured.Unstructured{
+				Object: addNameGVK(u.Object, map[string]any{
+					"spec": map[string]any{
+						keyCompositionRef: u.Object.Object["spec"].(map[string]any)[keyCompositionRef],
+					},
+				}),
+			},
+			Metadata: u.Metadata,
+		}); err != nil {
 			return errors.Wrap(err, errClaimOutput)
 		}
 	}
