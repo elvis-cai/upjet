@@ -6,6 +6,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -229,6 +230,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	switch {
 	// we prioritize critical annotation updates over status updates
 	case annotationsUpdated:
+		fmt.Println("annotationsUpdated")
 		return managed.ExternalObservation{
 			ResourceExists:          true,
 			ResourceUpToDate:        true,
@@ -237,6 +239,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		}, nil
 	// we prioritize status updates over late-init'ed spec updates
 	case !markedAvailable:
+		fmt.Println("markedAvailable")
 		addTTR(tr)
 		tr.SetConditions(xpv1.Available())
 		return managed.ExternalObservation{
@@ -247,6 +250,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// with the least priority wrt critical annotation updates and status updates
 	// we allow a late-initialization before the Workspace.Plan call
 	case lateInitedParams:
+		fmt.Println("lateInitedParams")
 		return managed.ExternalObservation{
 			ResourceExists:          true,
 			ResourceUpToDate:        true,
@@ -276,7 +280,7 @@ func addTTR(mg xpresource.Managed) {
 }
 
 func (e *external) Plan(ctx context.Context, mg xpresource.Managed) error {
-	_, err := e.workspace.Plan(ctx, mg)
+	_, err := e.workspace.Plan(ctx)
 	if err != nil {
 		return errors.Wrap(err, errPlan)
 	}

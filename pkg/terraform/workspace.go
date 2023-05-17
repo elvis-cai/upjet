@@ -28,8 +28,6 @@ import (
 	k8sExec "k8s.io/utils/exec"
 
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	xpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
 
 	"github.com/upbound/upjet/pkg/metrics"
 	"github.com/upbound/upjet/pkg/resource"
@@ -315,7 +313,7 @@ type PlanResult struct {
 }
 
 // Plan makes a blocking terraform plan call.
-func (w *Workspace) Plan(ctx context.Context, mg xpresource.Managed) (PlanResult, error) {
+func (w *Workspace) Plan(ctx context.Context) (PlanResult, error) {
 	// The last operation is still ongoing.
 	if w.LastOperation.IsRunning() {
 		return PlanResult{}, errors.Errorf("%s operation that started at %s is still running", w.LastOperation.Type, w.LastOperation.StartTime().String())
@@ -325,7 +323,6 @@ func (w *Workspace) Plan(ctx context.Context, mg xpresource.Managed) (PlanResult
 	if err != nil {
 		return PlanResult{}, tferrors.NewPlanFailed(out)
 	}
-	meta.AddAnnotations(mg, map[string]string{"out": string(out)})
 	line := ""
 	for _, l := range strings.Split(string(out), "\n") {
 		if strings.Contains(l, `"type":"change_summary"`) {
