@@ -276,7 +276,7 @@ func addTTR(mg xpresource.Managed) {
 }
 
 func (e *external) Plan(ctx context.Context, mg xpresource.Managed) error {
-	_, err := e.workspace.Plan(ctx, mg xpresource.Managed)
+	_, err := e.workspace.Plan(ctx, mg)
 	if err != nil {
 		return errors.Wrap(err, errPlan)
 	}
