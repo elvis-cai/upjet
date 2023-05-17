@@ -6,7 +6,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -382,9 +381,6 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
-	tfstate["myTest"] = "my-test"
-
-	fmt.Println("tfstate", tfstate)
 
 	if err := tr.SetObservation(tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot set observation")
@@ -395,6 +391,7 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	}
 
 	tr.SetConditions(xpv1.Available())
+	tr.SetAnnotations(map[string]string{"asd": "asd"})
 	return managed.ExternalObservation{
 		ResourceExists:    true,
 		ResourceUpToDate:  true,
