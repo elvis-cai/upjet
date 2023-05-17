@@ -381,10 +381,11 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
+	tfstate["my-test"] = "my-test"
+
 	if err := tr.SetObservation(tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot set observation")
 	}
-	tfstate["my-test"] = "my-test"
 	conn, err := resource.GetConnectionDetails(tfstate, tr, e.config)
 	if err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot get connection details")
