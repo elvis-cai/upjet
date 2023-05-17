@@ -275,12 +275,12 @@ func addTTR(mg xpresource.Managed) {
 	metrics.TTRMeasurements.WithLabelValues(gvk.Group, gvk.Version, gvk.Kind).Observe(time.Since(mg.GetCreationTimestamp().Time).Seconds())
 }
 
-func (e *external) Plan(ctx context.Context, mg xpresource.Managed) (error) {
-                _, err := e.workspace.Plan(ctx)
-                if err != nil {
-                        return errors.Wrap(err, errPlan)
-                }
-               return nil
+func (e *external) Plan(ctx context.Context, mg xpresource.Managed) error {
+	_, err := e.workspace.Plan(ctx)
+	if err != nil {
+		return errors.Wrap(err, errPlan)
+	}
+	return nil
 }
 
 func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.ExternalCreation, error) {
@@ -384,6 +384,7 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	if err := tr.SetObservation(tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot set observation")
 	}
+	tfstate["my-test"] = "my-test"
 	conn, err := resource.GetConnectionDetails(tfstate, tr, e.config)
 	if err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot get connection details")
