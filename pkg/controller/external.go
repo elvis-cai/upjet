@@ -6,6 +6,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -382,6 +383,8 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
 	tfstate["my-test"] = "my-test"
+
+	fmt.Println("tfstate", tfstate)
 
 	if err := tr.SetObservation(tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot set observation")
