@@ -382,7 +382,7 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
-	tfstate["my-test"] = "my-test"
+	tfstate["myTest"] = "my-test"
 
 	fmt.Println("tfstate", tfstate)
 
