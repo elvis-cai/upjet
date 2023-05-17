@@ -173,12 +173,14 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	switch {
 	case res.ASyncInProgress:
+		fmt.Println("AsyncInProgress")
 		mg.SetConditions(resource.AsyncOperationOngoingCondition())
 		return managed.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: true,
 		}, nil
 	case !res.Exists:
+		fmt.Println("RES NotExists")
 		return managed.ExternalObservation{
 			ResourceExists: false,
 		}, nil
@@ -193,6 +195,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// No operation was in progress, our observation completed successfully, and
 	// we have an observation to consume.
 	tfstate := map[string]any{}
+	fmt.Println("tfstate")
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
