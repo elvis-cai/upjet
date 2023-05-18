@@ -1,6 +1,8 @@
 module github.com/upbound/upjet
 
-replace github.com/upbound/upjet => github.com/elvis-cai/upjet v0.0.0-20230409105218-c4293426490f
+replace github.com/upbound/upjet => github.com/elvis-cai/upjet v0.0.0-20230518012242-d67a229b420b
+
+replace github.com/crossplane/crossplane-runtime => github.com/elvis-cai/crossplane-runtime v0.20.0-rc.0.0.20230518012616-8757b668c321
 
 go 1.19
 
