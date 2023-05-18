@@ -288,12 +288,12 @@ func (e *external) Plan(ctx context.Context, mg xpresource.Managed) error {
 	return nil
 }
 
-func (e *external) WritePlan(ctx context.Context, mg xpresource.Managed) error {
-	_, err := e.workspace.WritePlan(ctx)
+func (e *external) WritePlan(ctx context.Context, mg xpresource.Managed) ([]byte, error) {
+	out, err := e.workspace.WritePlan(ctx)
 	if err != nil {
-		return errors.Wrap(err, errPlan)
+		return nil, errors.Wrap(err, errPlan)
 	}
-	return nil
+	return out, nil
 }
 
 func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.ExternalCreation, error) {
