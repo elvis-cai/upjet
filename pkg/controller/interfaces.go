@@ -25,6 +25,7 @@ type Workspace interface {
 	Refresh(context.Context) (terraform.RefreshResult, error)
 	Import(context.Context, resource.Terraformed) (terraform.ImportResult, error)
 	Plan(context.Context) (terraform.PlanResult, error)
+	WritePlan(context.Context) ([]byte, error)
 }
 
 // ProviderSharer shares a native provider process with the receiver.
