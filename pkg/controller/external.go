@@ -288,6 +288,14 @@ func (e *external) Plan(ctx context.Context, mg xpresource.Managed) error {
 	return nil
 }
 
+func (e *external) WritePlan(ctx context.Context, mg xpresource.Managed) error {
+	_, err := e.workspace.WritePlan(ctx)
+	if err != nil {
+		return errors.Wrap(err, errPlan)
+	}
+	return nil
+}
+
 func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.ExternalCreation, error) {
 	if err := e.scheduleProvider(); err != nil {
 		return managed.ExternalCreation{}, errors.Wrapf(err, "cannot schedule a native provider during create: %s", mg.GetUID())
