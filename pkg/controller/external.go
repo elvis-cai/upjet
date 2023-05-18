@@ -173,14 +173,12 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	switch {
 	case res.ASyncInProgress:
-		fmt.Println("AsyncInProgress")
 		mg.SetConditions(resource.AsyncOperationOngoingCondition())
 		return managed.ExternalObservation{
 			ResourceExists:   true,
 			ResourceUpToDate: true,
 		}, nil
 	case !res.Exists:
-		fmt.Println("RES NotExists")
 		return managed.ExternalObservation{
 			ResourceExists: false,
 		}, nil

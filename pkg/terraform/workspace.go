@@ -25,6 +25,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/afero"
+
 	k8sExec "k8s.io/utils/exec"
 
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
@@ -347,6 +348,20 @@ func (w *Workspace) Plan(ctx context.Context) (PlanResult, error) {
 		Exists:   p.Changes.Add == 0,
 		UpToDate: p.Changes.Change == 0,
 	}, nil
+}
+
+func (w *Workspace) WritePlan(ctx context.Context) ([]byte, error) {
+	// The last operation is still ongoing.
+	if w.LastOperation.IsRunning() {
+		return nil, errors.Errorf("%s operation that started at %s is still running", w.LastOperation.Type, w.LastOperation.StartTime().String())
+	}
+	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false", "-json")
+	w.logger.Debug("plan ended", "out", w.filterFn(string(out)))
+	if err != nil {
+		return nil, tferrors.NewPlanFailed(out)
+	}
+
+	return out, nil
 }
 
 // ImportResult contains information about the current state of the resource.
