@@ -355,7 +355,7 @@ func (w *Workspace) WritePlan(ctx context.Context) ([]byte, error) {
 	if w.LastOperation.IsRunning() {
 		return nil, errors.Errorf("%s operation that started at %s is still running", w.LastOperation.Type, w.LastOperation.StartTime().String())
 	}
-	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false", "-json")
+	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false")
 	w.logger.Debug("plan ended", "out", w.filterFn(string(out)))
 	if err != nil {
 		return nil, tferrors.NewPlanFailed(out)
@@ -441,5 +441,6 @@ func (w *Workspace) runTF(ctx context.Context, execMode ExecMode, args ...string
 		metrics.CLITime.WithLabelValues(args[0], execMode.String()).Observe(time.Since(start).Seconds())
 		metrics.CLIExecutions.WithLabelValues(args[0], execMode.String()).Dec()
 	}()
+
 	return cmd.CombinedOutput()
 }
