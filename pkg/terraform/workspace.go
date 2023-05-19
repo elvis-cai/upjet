@@ -361,6 +361,7 @@ func (w *Workspace) WritePlan(ctx context.Context) ([]byte, error) {
 		return nil, tferrors.NewPlanFailed(out)
 	}
 
+	fmt.Println(string(out))
 	return out, nil
 }
 
