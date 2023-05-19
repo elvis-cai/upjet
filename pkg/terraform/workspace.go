@@ -355,13 +355,12 @@ func (w *Workspace) WritePlan(ctx context.Context) ([]byte, error) {
 	if w.LastOperation.IsRunning() {
 		return nil, errors.Errorf("%s operation that started at %s is still running", w.LastOperation.Type, w.LastOperation.StartTime().String())
 	}
-	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false")
+	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false", "-no-color")
 	w.logger.Debug("plan ended", "out", w.filterFn(string(out)))
 	if err != nil {
 		return nil, tferrors.NewPlanFailed(out)
 	}
 
-	fmt.Println(string(out))
 	return out, nil
 }
 
