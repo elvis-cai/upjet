@@ -25,7 +25,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/spf13/afero"
-
 	k8sExec "k8s.io/utils/exec"
 
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
@@ -441,6 +440,5 @@ func (w *Workspace) runTF(ctx context.Context, execMode ExecMode, args ...string
 		metrics.CLITime.WithLabelValues(args[0], execMode.String()).Observe(time.Since(start).Seconds())
 		metrics.CLIExecutions.WithLabelValues(args[0], execMode.String()).Dec()
 	}()
-
 	return cmd.CombinedOutput()
 }
