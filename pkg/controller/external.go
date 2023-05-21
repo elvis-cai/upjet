@@ -6,7 +6,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
@@ -248,7 +247,6 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// with the least priority wrt critical annotation updates and status updates
 	// we allow a late-initialization before the Workspace.Plan call
 	case lateInitedParams:
-		fmt.Println("lateInitedParams")
 		return managed.ExternalObservation{
 			ResourceExists:          true,
 			ResourceUpToDate:        true,
