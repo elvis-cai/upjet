@@ -193,7 +193,6 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// No operation was in progress, our observation completed successfully, and
 	// we have an observation to consume.
 	tfstate := map[string]any{}
-	fmt.Println("tfstate")
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
@@ -231,7 +230,6 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	switch {
 	// we prioritize critical annotation updates over status updates
 	case annotationsUpdated:
-		fmt.Println("annotationsUpdated")
 		return managed.ExternalObservation{
 			ResourceExists:          true,
 			ResourceUpToDate:        true,
@@ -240,7 +238,6 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		}, nil
 	// we prioritize status updates over late-init'ed spec updates
 	case !markedAvailable:
-		fmt.Println("markedAvailable")
 		addTTR(tr)
 		tr.SetConditions(xpv1.Available())
 		return managed.ExternalObservation{
@@ -394,7 +391,6 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	if err := json.JSParser.Unmarshal(res.State.GetAttributes(), &tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot unmarshal state attributes")
 	}
-
 	if err := tr.SetObservation(tfstate); err != nil {
 		return managed.ExternalObservation{}, errors.Wrap(err, "cannot set observation")
 	}
@@ -404,7 +400,6 @@ func (e *external) Import(ctx context.Context, tr resource.Terraformed) (managed
 	}
 
 	tr.SetConditions(xpv1.Available())
-	tr.SetAnnotations(map[string]string{"asd": "asd"})
 	return managed.ExternalObservation{
 		ResourceExists:    true,
 		ResourceUpToDate:  true,
