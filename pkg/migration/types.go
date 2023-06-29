@@ -30,14 +30,15 @@ const (
 
 // Resource categories
 const (
+	categoryUnknown Category = ""
 	// CategoryClaim category for composite claim resources
-	CategoryClaim Category = "Claim"
+	CategoryClaim Category = "claim"
 	// CategoryComposite category for composite resources
-	CategoryComposite Category = "Composite"
+	CategoryComposite Category = "composite"
 	// CategoryComposition category for compositions
-	CategoryComposition Category = "Composition"
+	CategoryComposition Category = "composition"
 	// CategoryManaged category for managed resources
-	CategoryManaged Category = "Managed"
+	CategoryManaged Category = "managed"
 )
 
 // Plan represents a migration plan for migrating managed resources,
@@ -52,7 +53,8 @@ type Plan struct {
 type Spec struct {
 	// Steps are the migration plan's steps that are expected
 	// to complete a migration when executed in order.
-	Steps []Step `json:"steps,omitempty"`
+	Steps   []Step `json:"steps,omitempty"`
+	stepMap map[string]*Step
 }
 
 // StepType is the type used to name a migration step
@@ -66,6 +68,8 @@ const (
 	StepTypePatch StepType = "Patch"
 	// StepTypeDelete denotes a delete step
 	StepTypeDelete StepType = "Delete"
+	// StepTypeExec executes the command with provided args
+	StepTypeExec StepType = "Exec"
 )
 
 // Step represents a step in the generated migration plan
@@ -83,6 +87,8 @@ type Step struct {
 	// Delete contains the information needed to run an StepTypeDelete step.
 	// Must be set when the Step.Type is StepTypeDelete.
 	Delete *DeleteStep `json:"delete,omitempty"`
+	// Exec contains the information needed to run a StepTypeExec step.
+	Exec *ExecStep `json:"exec,omitempty"`
 }
 
 // ApplyStep represents an apply step in which an array of manifests
@@ -133,6 +139,14 @@ type DeleteOptions struct {
 	FinalizerPolicy *FinalizerPolicy `json:"finalizerPolicy,omitempty"`
 }
 
+// ExecStep represents an exec command with its arguments
+type ExecStep struct {
+	// Command is the command to run
+	Command string `json:"command"`
+	// Args is the arguments of the command
+	Args []string `json:"args"`
+}
+
 // GroupVersionKind represents the GVK for an object's kind.
 // schema.GroupVersionKind does not contain json the serialization tags
 // for its fields, but we would like to serialize these as part of the
@@ -156,6 +170,11 @@ type Resource struct {
 
 // Category specifies if a resource is a Claim, Composite or a Managed resource
 type Category string
+
+// String returns a string representing the receiver Category.
+func (c Category) String() string {
+	return string(c)
+}
 
 // Metadata holds metadata for an object read from a Source
 type Metadata struct {
