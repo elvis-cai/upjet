@@ -349,6 +349,20 @@ func (w *Workspace) Plan(ctx context.Context) (PlanResult, error) {
 	}, nil
 }
 
+func (w *Workspace) WritePlan(ctx context.Context) ([]byte, error) {
+	// The last operation is still ongoing.
+	if w.LastOperation.IsRunning() {
+		return nil, errors.Errorf("%s operation that started at %s is still running", w.LastOperation.Type, w.LastOperation.StartTime().String())
+	}
+	out, err := w.runTF(ctx, ModeSync, "plan", "-refresh=false", "-input=false", "-lock=false", "-no-color")
+	w.logger.Debug("plan ended", "out", w.filterFn(string(out)))
+	if err != nil {
+		return nil, tferrors.NewPlanFailed(out)
+	}
+
+	return out, nil
+}
+
 // ImportResult contains information about the current state of the resource.
 // Same as RefreshResult.
 type ImportResult RefreshResult
